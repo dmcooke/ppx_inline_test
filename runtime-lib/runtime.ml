@@ -234,8 +234,9 @@ let parse_descr str =
 ;;
 
 let () =
-  if Base.Exported_for_specific_uses.am_testing
-  then (
+  (* TODO: Need a replacement for am_testing. *)
+  (* if Base.Exported_for_specific_uses.am_testing
+  then *) (
     match Array.to_list Sys.argv with
     | name :: "inline-test-runner" :: lib :: rest ->
       (* when we see this argument, we switch to test mode *)
@@ -380,16 +381,65 @@ let testing =
   else `Not_testing
 ;;
 
-let wall_time_clock_ns () = Time_now.nanoseconds_since_unix_epoch ()
+(* Quick Search (http://www-igm.univ-mlv.fr/~lecroq/string/node19.html) Uses a
+   variant of the bad-character shift table from Boyer-Moore.  Preprocessing
+   is O(m+a) time and O(a) space (a=alphabet size, m=needle length).
+   Worst-case complexity is O(m*n), but has good practical behaviour.  (It's a
+   slight variant of Horspool, which has average number of comparisons per
+   character between 1/a and 2/(a+1).)  *)
+
+type needle =
+  | SS_0
+  | SS_1 of char
+  | SS_shifts of string * int array
+
+let preprocess_substring s =
+  let m = String.length s in
+  if m = 0 then SS_0
+  else if m = 1 then SS_1 s.[0]
+  else
+    let bm = Array.make 256 (m+1) in
+    for i = 0 to m - 1 do
+      let c = String.unsafe_get s i in
+      Array.unsafe_set bm (int_of_char c) (m - i)
+    done;
+    SS_shifts (s, bm)
+
+let match_needle needle s =
+  match needle with
+  | SS_0 -> true
+  | SS_1 c -> String.contains s c
+  | SS_shifts (sub, bm) ->
+      let m = String.length sub in
+      let n = String.length s in
+      if n < m then false
+      else if m = n then String.equal sub s
+      else
+        (* Note that n > m > 1 *)
+        let n' = n - m in
+        let rec loop ofs k =
+          if k >= m then true
+          else if Char.equal sub.[k] s.[ofs + k] then loop ofs (k+1)
+          else
+            let ofs' = ofs + Array.unsafe_get bm (int_of_char s.[ofs + m]) in
+            if ofs' >= n' then false
+            else loop ofs' 0
+        in
+        loop 0 0
+
+let is_substring ~substring =
+  let nd = preprocess_substring substring in
+  match_needle nd
 
 let where_to_cut_backtrace =
   lazy
-    (Base.String.Search_pattern.create
+    (preprocess_substring
        (__MODULE__ ^ "." ^ "time_without_resetting_random_seeds"))
 ;;
 
+
 let time_without_resetting_random_seeds f =
-  let before_ns = wall_time_clock_ns () in
+  let before_ns = Mtime_clock.counter () in
   let res =
     (* To avoid noise in backtraces, we do two things.
 
@@ -402,23 +452,20 @@ let time_without_resetting_random_seeds f =
        and grabbing the backtrace from its exceptions (no wrapping of [f] with high order
        functions like Exn.protect, or (fun () -> f (); true)). *)
     try Ok (f ()) with
-    | exn -> Error (exn, Printexc.get_backtrace ())
+    | exn -> Error (exn, Printexc.get_raw_backtrace ())
   in
-  time_sec := Base.Int63.(wall_time_clock_ns () - before_ns |> to_float) /. 1e9;
+  let elapsed = Mtime_clock.count before_ns in
+  time_sec := Mtime.Span.to_s elapsed;
   res
 ;;
 
-let saved_caml_random_state = lazy (Stdlib.Random.State.make [| 100; 200; 300 |])
-let saved_base_random_state = lazy (Base.Random.State.make [| 111; 222; 333 |])
+let saved_caml_random_state = lazy (Random.State.make [| 100; 200; 300 |])
 
 let time_and_reset_random_seeds f =
   let caml_random_state = Stdlib.Random.get_state () in
-  let base_random_state = Base.Random.State.copy Base.Random.State.default in
   Stdlib.Random.set_state (Lazy.force saved_caml_random_state);
-  Base.Random.set_state (Lazy.force saved_base_random_state);
   let result = time_without_resetting_random_seeds f in
   Stdlib.Random.set_state caml_random_state;
-  Base.Random.set_state base_random_state;
   result
 ;;
 
@@ -456,7 +503,7 @@ let name_filter_match ~name_filter descr =
   match name_filter with
   | [] -> true
   | _ :: _ ->
-    List.exists (fun substring -> Base.String.is_substring ~substring descr) name_filter
+    List.exists (fun substring -> is_substring ~substring descr) name_filter
 ;;
 
 let print_delayed_errors () =
@@ -484,13 +531,24 @@ let add_hooks ((module C) : config) f () =
 ;;
 
 let hum_backtrace backtrace =
-  let open Base in
-  backtrace
-  |> String.split_lines
-  |> List.take_while ~f:(fun str ->
-    not (String.Search_pattern.matches (force where_to_cut_backtrace) str))
-  |> List.map ~f:(fun str -> "  " ^ str ^ "\n")
-  |> String.concat
+  match Printexc.backtrace_slots backtrace with
+  | None -> "(Program not linked with -g, cannot print stack backtrace)"
+  | Some slots ->
+     let n = Array.length slots in
+     let rec format_slots acc pos =
+       if pos >= n then acc
+       else
+         let slot = slots.(pos) in
+         match Printexc.Slot.format pos slot with
+         | None -> format_slots acc (pos+1)
+         | Some s ->
+            if match_needle (Lazy.force where_to_cut_backtrace) s then
+              acc
+            else
+              format_slots (("  " ^ s ^ "\n") :: acc) (pos+1)
+     in
+     let sslots = format_slots [] 0 in
+     String.concat "" (List.rev sslots)
 ;;
 
 let[@inline never] test_inner

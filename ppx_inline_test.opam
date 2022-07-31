@@ -11,8 +11,8 @@ build: [
 ]
 depends: [
   "ocaml" {>= "4.08.0"}
-  "base"
-  "time_now"
+  "mtime"
+  "sexplib0"
   "dune"     {>= "2.0.0"}
   "ppxlib"   {>= "0.26.0"}
 ]

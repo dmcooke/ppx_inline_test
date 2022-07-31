@@ -1,4 +1,3 @@
-open Base
 open Ppxlib
 open Ast_builder.Default
 
@@ -83,11 +82,11 @@ let rec short_desc_of_expr ~max_len e =
     let res =
       if String.length s >= max_len
       then (
-        let s_short = String.sub s ~pos:0 ~len:(max_len - 5) in
+        let s_short = StringLabels.sub s ~pos:0 ~len:(max_len - 5) in
         s_short ^ "[...]")
       else s
     in
-    String.map res ~f:(function
+    StringLabels.map res ~f:(function
       | '\n' -> ' '
       | c -> c)
 ;;
@@ -123,7 +122,7 @@ let apply_to_descr lid ~loc ?inner_loc e_opt id_opt tags more_arg =
       (evar ~loc ("Ppx_inline_test_lib.Runtime." ^ lid))
       [ Labelled "config", [%expr (module Inline_test_config)]
       ; Labelled "descr", descr
-      ; Labelled "tags", elist ~loc (List.map ~f:(estring ~loc) tags)
+      ; Labelled "tags", elist ~loc (ListLabels.map ~f:(estring ~loc) tags)
       ; Labelled "filename", filename
       ; Labelled "line_number", line
       ; Labelled "start_pos", start_pos
@@ -140,13 +139,19 @@ let can_use_test_extensions () =
   | (Drop | Drop_with_deadcode), _ | _, Some _ -> true
 ;;
 
+module SexpBool = struct
+  type t = bool
+  let sexp_of_t = Sexplib0.Sexp_conv.sexp_of_bool
+  let t_of_sexp = Sexplib0.Sexp_conv.bool_of_sexp
+end
+
 (* Set to [true] when we see a [let%test] or [let%expect_test] etc extension. *)
 module Has_tests =
   Driver.Create_file_property
     (struct
       let name = "ppx_inline_test.has_tests"
     end)
-    (Bool)
+    (SexpBool)
 
 let all_tags =
   [ "no-js"
@@ -159,7 +164,7 @@ let all_tags =
 ;;
 
 let validate_tag tag =
-  if not (List.mem all_tags tag ~equal:String.equal)
+  if not (List.exists (String.equal tag) all_tags)
   then Error (Spellcheck.spellcheck all_tags tag)
   else Ok ()
 ;;
@@ -173,7 +178,7 @@ let validate_extension_point_exn ~name_of_ppx_rewriter ~loc ~tags =
       "%s: extension is disabled because the tests would be ignored (the build system \
        didn't pass -inline-test-lib)"
       name_of_ppx_rewriter;
-  List.iter tags ~f:(fun tag ->
+  ListLabels.iter tags ~f:(fun tag ->
     match validate_tag tag with
     | Ok () -> ()
     | Error hint ->
@@ -254,7 +259,7 @@ module E = struct
     ||| map ppat_any ~f:(fun f -> f `None)
     ||| map
           (ppat_extension
-             (extension (cst ~to_string:Fn.id "name") (single_expr_payload __)))
+             (extension (cst ~to_string:Fun.id "name") (single_expr_payload __)))
           ~f:(fun f e -> f (`Expr e))
   ;;
 
