@@ -420,9 +420,10 @@ let match_needle needle s =
         let rec loop ofs k =
           if k >= m then true
           else if Char.equal sub.[k] s.[ofs + k] then loop ofs (k+1)
+          else if ofs >= n' then false
           else
             let ofs' = ofs + Array.unsafe_get bm (int_of_char s.[ofs + m]) in
-            if ofs' >= n' then false
+            if ofs' > n' then false
             else loop ofs' 0
         in
         loop 0 0
